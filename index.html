@@ -1,414 +1,1082 @@
 <!doctype html>
 <html lang="fr">
-  <head>
-    <meta charset="utf-8" />
-    <title>Minuteur & Chronomètre — Version simple</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- Tailwind (CDN) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React + ReactDOM (UMD) -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <!-- Babel pour JSX (sans TypeScript) -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>
-      @keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg);} }
-      @keyframes spin-rev { from { transform: rotate(360deg); } to { transform: rotate(0deg);} }
-      @keyframes aura { 0%{ box-shadow: 0 0 0 0 rgba(250,204,21,0.15); } 70%{ box-shadow: 0 0 40px 10px rgba(250,204,21,0.18);} 100%{ box-shadow: 0 0 0 0 rgba(250,204,21,0);} }
-      @keyframes sand { 0%{ opacity:.7 } 50%{ opacity:1 } 100%{ opacity:.7 } }
-      @keyframes warning { 0%{ box-shadow: 0 0 0 0 rgba(251,191,36,0.0);} 50%{ box-shadow: 0 0 40px 10px rgba(251,191,36,0.25);} 100%{ box-shadow: 0 0 0 0 rgba(251,191,36,0.0);} }
-      .animate-spin-slow { animation: spin-slow 9s linear infinite; }
-      .animate-spin-rev { animation: spin-rev 12s linear infinite; }
-      .animate-aura { animation: aura 2.4s ease-in-out infinite; }
-      .animate-sand { animation: sand 1s ease-in-out infinite; }
-      .animate-warning { animation: warning 1.2s ease-in-out infinite; }
-    </style>
-  </head>
-  <body class="bg-black">
-    <div id="app"></div>
+<head>
+<meta charset="utf-8" />
+<title>Retourneur de Temps — Minuteur & Chronomètre</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* ====== Polices système (aucun CDN — fonctionne hors-ligne) ====== */
+  :root{
+    --ink:        #0a0805;          /* fond encre */
+    --ink-2:      #15100a;          /* fond dégradé bas */
+    --parchment:  #e9dcc0;          /* texte clair, parchemin */
+    --parchment-2:#bcae8e;          /* texte secondaire */
+    --gold:       #d4a23a;          /* or principal */
+    --gold-bright:#f2cd6b;          /* or éclat */
+    --gold-deep:  #8a6a1f;          /* or sombre / gravure */
+    --ember:      #c2592b;          /* alerte dernières secondes */
+    --green:      #4f8a5b;          /* démarrer */
+    --serif: "Iowan Old Style","Palatino Linotype","Palatino","Book Antiqua","URW Palladio L",Georgia,"Times New Roman",serif;
+    --sans: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --ring-glow: 0 0 60px -10px rgba(212,162,58,.45);
+  }
 
-    <script type="text/babel">
-      const { useState, useMemo, useEffect, useRef } = React;
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
+  body{
+    margin:0;
+    font-family:var(--sans);
+    color:var(--parchment);
+    background:
+      radial-gradient(1200px 700px at 50% -10%, rgba(212,162,58,.10), transparent 60%),
+      radial-gradient(900px 600px at 50% 120%, rgba(194,89,43,.08), transparent 60%),
+      linear-gradient(180deg, var(--ink) 0%, var(--ink) 45%, var(--ink-2) 100%);
+    background-attachment: fixed;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
 
-      const MODES = { CHRONO: "chronometre", TIMER: "minuteur" };
+  /* grain / brume légère */
+  body::before{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:radial-gradient(rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size:3px 3px;
+    mix-blend-mode:screen;
+    opacity:.5;
+  }
 
-      function MinuteurChronometre() {
-        const [mode, setMode] = useState(MODES.CHRONO);
-        const [running, setRunning] = useState(false);
-        const [elapsed, setElapsed] = useState(0);
+  .wrap{
+    position:relative; z-index:1;
+    min-height:100vh;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:flex-start;
+    padding:clamp(16px,3vw,40px);
+    gap:clamp(18px,2.4vw,30px);
+  }
 
-        const [h, setH] = useState(0);
-        const [m, setM] = useState(0);
-        const [s, setS] = useState(0);
-        const totalSeconds = useMemo(() => h * 3600 + m * 60 + s, [h, m, s]);
-        const [remaining, setRemaining] = useState(0);
-        const [initialDuration, setInitialDuration] = useState(0);
+  /* ====== Barre supérieure : horloge live + actions ====== */
+  .topbar{
+    width:100%; max-width:1100px;
+    display:flex; align-items:center; justify-content:space-between;
+    gap:16px; flex-wrap:wrap;
+  }
+  .liveclock{
+    display:flex; align-items:baseline; gap:10px;
+    font-family:var(--serif);
+  }
+  .liveclock .label{
+    font-family:var(--sans);
+    font-size:.7rem; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--parchment-2);
+  }
+  .liveclock .time{
+    font-size:clamp(1.1rem,2.2vw,1.5rem);
+    font-variant-numeric:tabular-nums; letter-spacing:.04em;
+    color:var(--gold-bright);
+    text-shadow:0 0 18px rgba(242,205,107,.35);
+  }
+  .topactions{ display:flex; gap:8px; flex-wrap:wrap; }
 
-        // ✅ Mode “affichage élève”
-        const [studentView, setStudentView] = useState(false);
+  .btn{
+    font-family:var(--sans);
+    font-size:.85rem; letter-spacing:.02em;
+    color:var(--parchment);
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(212,162,58,.28);
+    border-radius:999px;
+    padding:.62em 1.05em;
+    cursor:pointer;
+    transition:transform .08s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
+    display:inline-flex; align-items:center; gap:.5em;
+  }
+  .btn:hover{ background:rgba(212,162,58,.12); border-color:rgba(212,162,58,.55); }
+  .btn:active{ transform:translateY(1px) scale(.99); }
+  .btn:focus-visible{ outline:2px solid var(--gold-bright); outline-offset:2px; }
+  .btn.on{ background:rgba(212,162,58,.20); border-color:var(--gold); color:var(--gold-bright); }
 
-        const intervalRef = useRef(null);
+  /* ====== Titre ====== */
+  .header{ text-align:center; }
+  .eyebrow{
+    font-size:.72rem; letter-spacing:.34em; text-transform:uppercase;
+    color:var(--gold-deep); margin:0 0 .35em;
+  }
+  .title{
+    font-family:var(--serif);
+    font-weight:600; font-style:italic;
+    font-size:clamp(1.9rem,4.6vw,3rem);
+    margin:0; line-height:1.02;
+    color:var(--parchment);
+    text-shadow:0 1px 0 rgba(0,0,0,.5);
+  }
+  .title em{ color:var(--gold-bright); font-style:italic; }
 
-        function start() {
-          if (running) return;
-          if (mode === MODES.TIMER) {
-            const init = remaining > 0 ? remaining : totalSeconds;
-            if (init <= 0) return;
-            setRemaining(init);
-            setInitialDuration(init);
-          }
-          setRunning(true);
-        }
+  /* ====== Sélecteur de mode ====== */
+  .modeswitch{
+    display:inline-flex; padding:5px; gap:4px;
+    background:rgba(0,0,0,.35);
+    border:1px solid rgba(212,162,58,.25);
+    border-radius:999px;
+  }
+  .modeswitch button{
+    font-family:var(--serif); font-size:.95rem;
+    border:0; cursor:pointer; color:var(--parchment-2);
+    background:transparent; padding:.5em 1.3em; border-radius:999px;
+    transition:all .18s ease;
+  }
+  .modeswitch button[aria-pressed="true"]{
+    background:linear-gradient(180deg,var(--gold-bright),var(--gold));
+    color:#241a06; font-weight:600;
+    box-shadow:0 4px 18px -6px rgba(212,162,58,.7);
+  }
 
-        function stop() { setRunning(false); }
+  /* sous-sélecteur de style d'horloge */
+  .clockstyles{ display:inline-flex; gap:6px; flex-wrap:wrap; justify-content:center; }
+  .clockstyles .cstyle{
+    font-family:var(--sans); font-size:.82rem; cursor:pointer;
+    color:var(--parchment-2); background:rgba(255,255,255,.05);
+    border:1px solid rgba(212,162,58,.25); border-radius:999px; padding:.42em 1em;
+    transition:all .15s ease;
+  }
+  .clockstyles .cstyle:hover{ background:rgba(212,162,58,.12); color:var(--parchment); }
+  .clockstyles .cstyle[aria-pressed="true"]{
+    background:rgba(212,162,58,.22); border-color:var(--gold); color:var(--gold-bright);
+  }
+  body.focusmode .clockstyles{ display:none !important; }
 
-        function reset() {
-          setRunning(false);
-          setElapsed(0);
-          setRemaining(0);
-          setInitialDuration(0);
-        }
+  /* face d'horloge */
+  .clockface{ width:clamp(260px,40vw,440px); height:clamp(260px,40vw,440px);
+    display:grid; place-items:center; }
+  /* la word clock (style magique) est plus large que les cadrans ronds :
+     on laisse le conteneur s'adapter à son contenu et rester centré */
+  .clockface:has(.wordclock){ width:auto; height:auto; }
+  .clockface svg{ width:100%; height:100%; overflow:visible; }
+  .clockface .ring-outer{ animation:spin 26s linear infinite; }
+  .clockface .ring-inner{ animation:spinrev 18s linear infinite; }
+  .clockface .aura{ animation:breathe 4s ease-in-out infinite; }
 
-        useEffect(() => {
-          if (!running) {
-            if (intervalRef.current) {
-              clearInterval(intervalRef.current);
-              intervalRef.current = null;
-            }
-            return;
-          }
-          intervalRef.current = setInterval(() => {
-            if (mode === MODES.CHRONO) {
-              setElapsed(e => e + 1);
-            } else {
-              setRemaining(r => {
-                const next = r - 1;
-                if (next <= 0) {
-                  try { playBeep(); } catch(e) {}
-                  setRunning(false);
-                  return 0;
-                }
-                return next;
-              });
-            }
-          }, 1000);
+  /* ====== Word clock magique : arche flottante + pendule de pierre + brume ====== */
+  .wordclock{
+    width:clamp(330px,54vw,640px);
+    aspect-ratio:4/3;
+    display:grid; place-items:center;
+    position:relative;
+    isolation:isolate;
+    overflow:hidden;
+    border-radius:14px;
+  }
+  body.focusmode .wordclock{ width:min(94vw, 90vh); }
+  body.focusmode .wordclock .grid{ font-size:min(3.8vmin, 2.6rem); gap:.42em .62em; }
 
-          return () => {
-            if (intervalRef.current) {
-              clearInterval(intervalRef.current);
-              intervalRef.current = null;
-            }
-          };
-        }, [running, mode]);
+  /* --- couche 0 : brume dorée de lever de soleil --- */
+  .wordclock .mist{
+    position:absolute; inset:0; z-index:-4; overflow:hidden;
+    background:
+      radial-gradient(70% 50% at 50% 30%, rgba(242,205,107,.16), transparent 65%),
+      radial-gradient(120% 80% at 50% 108%, rgba(242,205,107,.34), transparent 60%),
+      radial-gradient(90% 70% at 50% 120%, rgba(212,130,60,.26), transparent 55%),
+      linear-gradient(180deg, #0a0805 0%, #140d07 50%, #2a1908 100%);
+  }
+  .wordclock .mist .fog{
+    position:absolute; left:-30%; width:160%; height:60%; border-radius:50%;
+    background:radial-gradient(ellipse at center, rgba(242,205,107,.14), transparent 70%);
+    filter:blur(26px);
+    animation:drift var(--fdur,26s) ease-in-out var(--fdelay,0s) infinite alternate;
+  }
+  @keyframes drift{
+    0%{ transform:translateX(-8%) translateY(0) scale(1); opacity:.5; }
+    100%{ transform:translateX(8%) translateY(-6%) scale(1.12); opacity:.85; }
+  }
+  /* lueur d'aube en bas */
+  .wordclock .mist::after{
+    content:""; position:absolute; left:0; right:0; bottom:0; height:42%;
+    background:linear-gradient(180deg, transparent, rgba(242,205,107,.18));
+    animation:dawn 7s ease-in-out infinite;
+  }
+  @keyframes dawn{ 0%,100%{ opacity:.55; } 50%{ opacity:.95; } }
 
-        useEffect(() => {
-          if (!running && mode === MODES.TIMER) setRemaining(totalSeconds);
-        }, [totalSeconds, running, mode]);
+  /* --- couche 1 : les mots émergeant de la brume --- */
+  .wordclock .grid{
+    position:relative; z-index:1;
+    display:flex; flex-direction:column; gap:.42em;
+    padding:12% 9%;
+    font-family:var(--serif);
+    font-size:clamp(.66rem, 1.8vmin, 1.2rem);
+    line-height:1;
+    text-align:center;
+    width:100%; box-sizing:border-box;
+    place-items:center;
+  }
+  .wordclock .grid .row{ display:flex; justify-content:center; gap:.62em; width:100%; }
+  .wordclock .word{
+    letter-spacing:.08em;
+    color:rgba(233,220,192,.14);     /* éteint : trame discrète */
+    transition:color .7s ease, text-shadow .7s ease;
+    white-space:nowrap;
+    text-transform:uppercase;
+    font-weight:600;
+  }
+  .wordclock .word.on{
+    color:var(--gold-bright);
+    text-shadow:0 0 6px rgba(242,205,107,.9), 0 0 16px rgba(212,162,58,.6), 0 0 32px rgba(212,162,58,.4);
+    animation:wordglow 3.6s ease-in-out infinite;
+  }
+  @keyframes wordglow{
+    0%,100%{ text-shadow:0 0 6px rgba(242,205,107,.85), 0 0 16px rgba(212,162,58,.5); }
+    50%{ text-shadow:0 0 10px rgba(242,205,107,1), 0 0 26px rgba(212,162,58,.85), 0 0 44px rgba(212,162,58,.5); }
+  }
+  @media (prefers-reduced-motion:reduce){
+    .wordclock .fog, .wordclock .mist::after, .wordclock .word.on{ animation:none; }
+  }
 
-        // ✅ Raccourci clavier: touche "E" pour basculer affichage élève
-        useEffect(() => {
-          const onKeyDown = (e) => {
-            if (e.key && e.key.toLowerCase() === "e") {
-              setStudentView(v => !v);
-            }
-          };
-          window.addEventListener("keydown", onKeyDown);
-          return () => window.removeEventListener("keydown", onKeyDown);
-        }, []);
+  /* ====== Carte centrale ====== */
+  .stage{
+    width:100%; max-width:1100px;
+    background:
+      radial-gradient(120% 140% at 50% 0%, rgba(212,162,58,.06), transparent 60%),
+      rgba(10,8,5,.55);
+    border:1px solid rgba(212,162,58,.22);
+    border-radius:24px;
+    padding:clamp(24px,3.5vw,48px);
+    box-shadow:var(--ring-glow), inset 0 0 60px rgba(0,0,0,.5);
+    backdrop-filter:blur(4px);
+  }
+  .stage.running{ border-color:rgba(212,162,58,.5); }
 
-        function playBeep() {
-          const Ctx = window.AudioContext || window.webkitAudioContext;
-          if (!Ctx) return;
-          const ctx = new Ctx();
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.type = "sine"; o.frequency.value = 880;
-          o.connect(g); g.connect(ctx.destination);
-          g.gain.setValueAtTime(0.0001, ctx.currentTime);
-          g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.01);
-          o.start();
-          g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.8);
-          o.stop(ctx.currentTime + 0.85);
-        }
+  .timerpanel{
+    display:grid; grid-template-columns:1fr auto; gap:clamp(24px,4vw,56px);
+    align-items:center;
+  }
+  .clockpanel{ display:flex; align-items:center; justify-content:center; }
 
-        function format(sec) {
-          const t = Math.max(0, Math.abs(sec));
-          const hh = Math.floor(t / 3600);
-          const mm = Math.floor((t % 3600) / 60);
-          const ss = Math.floor(t % 60);
-          const pad = (n) => String(n).padStart(2, "0");
-          return `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
-        }
+  .readout{ display:flex; flex-direction:column; gap:18px; min-width:0; }
 
-        const displayTime = mode === MODES.CHRONO ? elapsed : remaining;
-        const timerProgress = mode === MODES.TIMER && initialDuration > 0
-          ? Math.min(1, Math.max(0, 1 - remaining / initialDuration))
-          : 0;
-        const lastSeconds = mode === MODES.TIMER && remaining > 0 && remaining <= 10;
+  .bigtime{
+    font-family:var(--serif);
+    font-variant-numeric:tabular-nums;
+    font-weight:600;
+    font-size:clamp(3.2rem,11vw,7rem);
+    line-height:.92; letter-spacing:.01em;
+    color:var(--parchment);
+    text-shadow:0 0 30px rgba(212,162,58,.22);
+    transition:color .2s ease;
+  }
+  .bigtime.warn{ color:var(--ember); text-shadow:0 0 34px rgba(194,89,43,.5); }
+  .status{ font-size:.82rem; letter-spacing:.18em; text-transform:uppercase; color:var(--parchment-2); }
 
-        const containerGlow = running
-          ? "shadow-[0_0_40px_rgba(251,191,36,0.15)] ring-2 ring-amber-300/50"
-          : "ring-1 ring-zinc-600/60";
+  .controls{ display:flex; gap:12px; flex-wrap:wrap; }
+  .ctrl{
+    font-family:var(--sans); font-size:.95rem; font-weight:500;
+    border:1px solid transparent; border-radius:14px;
+    padding:.78em 1.3em; cursor:pointer; color:#1a1206;
+    transition:transform .08s ease, filter .15s ease, box-shadow .15s ease;
+  }
+  .ctrl:active{ transform:translateY(1px) scale(.99); }
+  .ctrl:focus-visible{ outline:2px solid var(--gold-bright); outline-offset:2px; }
+  .ctrl.start{ background:linear-gradient(180deg,#6fae7d,var(--green)); color:#0e1a10; box-shadow:0 6px 20px -8px rgba(79,138,91,.8); }
+  .ctrl.stop{ background:linear-gradient(180deg,var(--gold-bright),var(--gold)); box-shadow:0 6px 20px -8px rgba(212,162,58,.8); }
+  .ctrl.ghost{ background:rgba(255,255,255,.06); color:var(--parchment); border-color:rgba(212,162,58,.3); }
+  .ctrl.ghost:hover{ background:rgba(212,162,58,.12); }
+  .ctrl:hover{ filter:brightness(1.05); }
 
-        // ✅ En mode élève, on agrandit la “carte” et on centre plus fort
-        const shell = studentView
-          ? "w-full max-w-5xl"
-          : "w-full max-w-4xl";
+  .hint{ font-size:.85rem; color:var(--parchment-2); margin:0; }
 
-        return (
-          <div className="min-h-screen w-full relative overflow-hidden bg-gradient-to-b from-[#0b0d12] via-[#0b0d12] to-[#151827] text-zinc-100 flex items-center justify-center p-6">
-            <div className={shell + " relative"}>
+  /* ====== Réglage durée ====== */
+  .timersetup{ margin-top:6px; display:flex; flex-direction:column; gap:14px; }
+  .fieldlabel{ font-size:.72rem; letter-spacing:.2em; text-transform:uppercase; color:var(--parchment-2); }
+  .inputs{ display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; }
+  .numfield{ display:flex; flex-direction:column; gap:6px; }
+  .numfield input{
+    width:84px; font-family:var(--serif); font-size:1.3rem; text-align:center;
+    font-variant-numeric:tabular-nums;
+    color:var(--parchment); background:rgba(0,0,0,.4);
+    border:1px solid rgba(212,162,58,.3); border-radius:12px; padding:.45em 0;
+  }
+  .numfield input:focus{ outline:none; border-color:var(--gold); box-shadow:0 0 0 3px rgba(212,162,58,.2); }
+  .numfield span{ font-size:.68rem; letter-spacing:.14em; text-transform:uppercase; color:var(--parchment-2); text-align:center; }
+  .colon{ font-family:var(--serif); font-size:1.5rem; color:var(--gold-deep); padding-bottom:.7em; }
 
-              {/* ✅ En-tête : en mode élève on peut garder juste les toggles (ou même les masquer si tu veux) */}
-              <div className={`mb-4 flex items-center justify-between ${studentView ? "opacity-90" : ""}`}>
-                <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-                  {mode === MODES.CHRONO ? "Retourneur de Temps" : "Sablier Magique"}
-                  {!studentView && (
-                    <span className="text-xs text-zinc-400">— Minuteur & Chronomètre</span>
-                  )}
-                </h1>
+  .presets{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .presets .lbl{ font-size:.78rem; color:var(--parchment-2); }
+  .chip{
+    font-family:var(--sans); font-size:.82rem; cursor:pointer;
+    color:var(--parchment); background:rgba(255,255,255,.05);
+    border:1px solid rgba(212,162,58,.28); border-radius:999px; padding:.42em .9em;
+    transition:all .15s ease;
+  }
+  .chip:hover{ background:rgba(212,162,58,.14); border-color:var(--gold); }
 
-                <div className="flex items-center gap-2">
-                  <StudentViewToggle value={studentView} onChange={setStudentView} />
-                  <ModeSwitcher mode={mode} onChange={(m)=>{ setMode(m); reset(); }} />
-                </div>
+  .progress{ height:7px; width:100%; background:rgba(0,0,0,.4); border-radius:999px; overflow:hidden; border:1px solid rgba(212,162,58,.18); }
+  .progress > i{ display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--gold-deep),var(--gold-bright)); transition:width .9s linear; }
+  .progress.warn > i{ background:linear-gradient(90deg,var(--ember),var(--gold-bright)); }
+
+  /* ====== Visuel : le Retourneur ====== */
+  .totem{ width:clamp(220px,30vw,300px); height:clamp(220px,30vw,300px); flex:none; }
+  .totem svg{ width:100%; height:100%; overflow:visible; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes spinrev { to { transform:rotate(-360deg); } }
+  @keyframes breathe { 0%,100%{ opacity:.35; } 50%{ opacity:.85; } }
+  .ring-outer{ transform-origin:100px 100px; }
+  .ring-inner{ transform-origin:100px 100px; }
+  .running .ring-outer{ animation:spin 18s linear infinite; }
+  .running .ring-inner{ animation:spinrev 11s linear infinite; }
+  .aura{ transform-origin:100px 100px; }
+  .running .aura{ animation:breathe 3.4s ease-in-out infinite; }
+
+  /* sablier (mode minuteur) */
+  .sand-stream{ opacity:0; }
+  .running .sand-stream{ opacity:1; animation:breathe 1.1s ease-in-out infinite; }
+
+  /* disque tournant du retourneur (minuteur) */
+  @keyframes discspin { to { transform:rotate(360deg); } }
+  .disc-spin{ transform-origin:100px 110px; }
+  .running .disc-spin{ animation:discspin 14s linear infinite; }
+  /* le retournement de 180° : appliqué via une classe, transition douce */
+  .flipper{ transform-origin:100px 110px; transition:transform .9s cubic-bezier(.45,.05,.25,1); }
+  .flipper.flipped{ transform:rotate(180deg); }
+
+  .footnote{ max-width:1100px; width:100%; font-size:.82rem; color:var(--parchment-2); line-height:1.6; }
+  .footnote kbd{
+    font-family:var(--sans); font-size:.72rem; color:var(--gold-bright);
+    background:rgba(212,162,58,.12); border:1px solid rgba(212,162,58,.35);
+    border-radius:6px; padding:.12em .5em;
+  }
+
+  .hidden{ display:none !important; }
+
+  /* ====== Mode plein écran / affichage élève ====== */
+  body.focusmode .topbar,
+  body.focusmode .modeswitch,
+  body.focusmode .header .eyebrow,
+  body.focusmode .footnote,
+  body.focusmode .timersetup,
+  body.focusmode .controls,
+  body.focusmode .status,
+  body.focusmode .hint{ display:none !important; }
+  body.focusmode .wrap{ justify-content:center; }
+  body.focusmode .stage{
+    border:none; background:transparent; box-shadow:none; backdrop-filter:none;
+    padding:0; max-width:none; width:100%;
+  }
+  body.focusmode .timerpanel{
+    grid-template-columns:1fr; justify-items:center; text-align:center; gap:clamp(28px,5vw,60px);
+  }
+  body.focusmode .readout{ align-items:center; }
+  /* Tailles adaptatives : suivent la plus petite dimension de l'écran (vmin),
+     bornées par min()/max() pour rester lisibles sur toute résolution / tout ratio. */
+  body.focusmode .bigtime{ font-size:min(20vw, 34vh); line-height:.9; }
+  body.focusmode .totem{ width:min(42vw, 60vh); height:min(42vw, 60vh); }
+  body.focusmode .clockface{ width:min(80vw, 82vh); height:min(80vw, 82vh); }
+  body.focusmode .header .title{ font-size:clamp(1.1rem, 2.6vmin, 2rem); opacity:.85; }
+  /* En écran large (paysage) on garde temps + visuel côte à côte si la place le permet */
+  @media (min-aspect-ratio: 16/10) and (min-width: 900px){
+    body.focusmode.layout-split .timerpanel{ grid-template-columns:auto auto; align-items:center; }
+    body.focusmode.layout-split .bigtime{ font-size:min(16vw, 40vh); }
+    body.focusmode.layout-split .totem{ width:min(34vw, 64vh); height:min(34vw, 64vh); }
+  }
+  /* mini-horloge live conservée, discrète, en haut */
+  body.focusmode .focusclock{ display:flex; }
+  /* en plein écran navigateur : on bascule l'horloge topbar vers la version flottante */
+  body.fs-active .liveclock{ visibility:hidden; }
+  body.fs-active .focusclock{ display:flex; }
+  .focusclock{
+    display:none; position:fixed; top:18px; right:24px; z-index:5;
+    align-items:baseline; gap:8px; font-family:var(--serif);
+    color:var(--gold-bright); opacity:.7;
+  }
+  .focusclock .t{ font-variant-numeric:tabular-nums; font-size:1.05rem; letter-spacing:.04em; }
+  .focus-exit{
+    display:none; position:fixed; top:16px; left:24px; z-index:5;
+  }
+  body.focusmode .focus-exit{ display:inline-flex; }
+
+  @media (max-width:760px){
+    .timerpanel{ grid-template-columns:1fr; justify-items:center; text-align:center; }
+    .readout{ align-items:center; }
+    .controls,.presets,.inputs{ justify-content:center; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{ animation:none !important; transition:none !important; }
+  }
+</style>
+</head>
+<body>
+  <!-- horloge + bouton sortie visibles seulement en plein écran -->
+  <button id="focusExit" class="btn focus-exit">↩ Quitter le plein écran</button>
+  <div class="focusclock"><span class="label" style="font-size:.6rem;letter-spacing:.2em;text-transform:uppercase;color:var(--parchment-2)">Heure</span><span class="t" id="focusClockTime">00:00:00</span></div>
+
+  <div class="wrap">
+
+    <!-- ===== Barre supérieure ===== -->
+    <div class="topbar">
+      <div class="liveclock">
+        <span class="label">Heure</span>
+        <span class="time" id="liveClock">00:00:00</span>
+      </div>
+      <div class="topactions">
+        <button id="focusBtn" class="btn" title="Vue épurée pour les élèves (touche E)">⤢ Affichage élève</button>
+        <button id="fsBtn" class="btn" title="Plein écran (touche F)">⛶ Plein écran</button>
+      </div>
+    </div>
+
+    <!-- ===== Titre ===== -->
+    <div class="header">
+      <p class="eyebrow">Gestion du temps en classe</p>
+      <h1 class="title" id="title">Le <em>Retourneur de Temps</em></h1>
+    </div>
+
+    <!-- ===== Sélecteur de mode ===== -->
+    <div class="modeswitch" role="tablist" aria-label="Mode">
+      <button id="modeChrono" role="tab" aria-pressed="true">Chronomètre</button>
+      <button id="modeTimer"  role="tab" aria-pressed="false">Minuteur</button>
+      <button id="modeClock"  role="tab" aria-pressed="false">Horloge</button>
+    </div>
+
+    <!-- styles d'horloge (visibles seulement en mode Horloge) -->
+    <div class="clockstyles hidden" id="clockStyles" role="tablist" aria-label="Style d'horloge">
+      <button class="cstyle" data-style="analog" aria-pressed="true">Aiguilles</button>
+      <button class="cstyle" data-style="digital" aria-pressed="false">Numérique</button>
+      <button class="cstyle" data-style="hybrid" aria-pressed="false">Hybride</button>
+      <button class="cstyle" data-style="magic" aria-pressed="false">Magique</button>
+    </div>
+
+    <!-- ===== Scène ===== -->
+    <div class="stage" id="stage">
+      <!-- Contenu Chronomètre / Minuteur -->
+      <div class="timerpanel" id="timerPanel">
+        <div class="readout">
+          <div class="bigtime" id="bigTime">00:00:00</div>
+          <div class="status" id="status">En pause</div>
+
+          <div class="controls" id="controls">
+            <button class="ctrl start" id="startBtn">Démarrer</button>
+            <button class="ctrl ghost" id="resetBtn">Remettre à zéro</button>
+            <button class="ctrl ghost" id="testBtn" hidden>Tester l'alarme</button>
+          </div>
+          <p class="hint" id="hint"></p>
+
+          <!-- réglages minuteur -->
+          <div class="timersetup hidden" id="timerSetup">
+            <div>
+              <div class="fieldlabel">Durée du minuteur</div>
+              <div class="inputs">
+                <label class="numfield"><input id="inH" type="number" min="0" max="99" value="0" inputmode="numeric"><span>heures</span></label>
+                <span class="colon">:</span>
+                <label class="numfield"><input id="inM" type="number" min="0" max="59" value="5" inputmode="numeric"><span>minutes</span></label>
+                <span class="colon">:</span>
+                <label class="numfield"><input id="inS" type="number" min="0" max="59" value="0" inputmode="numeric"><span>secondes</span></label>
               </div>
-
-              <div className={`bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur ${containerGlow}`}>
-                <div className={`grid grid-cols-1 md:grid-cols-[1fr_auto] gap-8 md:items-center ${studentView ? "md:gap-12" : ""}`}>
-                  <div className="flex flex-col">
-                    <TimeDisplay value={displayTime} format={format} running={running} studentView={studentView} />
-
-                    {/* ✅ Controls cachés en affichage élève */}
-                    {!studentView && (
-                      <>
-                        <div className="mt-4 flex gap-3 flex-wrap">
-                          {!running ? (
-                            <button onClick={start} className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[.99] transition font-medium">Démarrer</button>
-                          ) : (
-                            <button onClick={stop} className="px-5 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 active:scale-[.99] transition font-medium">Arrêter</button>
-                          )}
-                          <button onClick={reset} className="px-5 py-3 rounded-xl bg-zinc-700 hover:bg-zinc-600 active:scale-[.99] transition font-medium">Remettre à zéro</button>
-                          {mode === MODES.TIMER && (
-                            <button onClick={playBeep} className="px-5 py-3 rounded-xl bg-sky-700 hover:bg-sky-600 active:scale-[.99] transition font-medium">Tester l'alarme</button>
-                          )}
-                        </div>
-
-                        {mode === MODES.TIMER && (
-                          <p className="mt-4 text-sm text-zinc-400">
-                            {initialDuration === 0 ? "Définissez une durée puis pressez « Démarrer »." :
-                              running ? "Compte à rebours en cours." :
-                              remaining > 0 ? `Prêt: ${format(remaining)}` : "Prêt à démarrer."}
-                          </p>
-                        )}
-                      </>
-                    )}
-                  </div>
-
-                  <div className="place-self-center md:justify-self-center">
-                    {mode === MODES.CHRONO ? (
-                      <TimeTurnerVisual running={running} />
-                    ) : (
-                      <HourglassVisual running={running} progress={timerProgress} warn={!!lastSeconds} />
-                    )}
-                  </div>
-                </div>
-
-                {/* ✅ Zone minuteur : cachée en mode élève */}
-                {!studentView && mode === MODES.TIMER ? (
-                  <div className="mt-8">
-                    <TimerInputs h={h} m={m} s={s}
-                      onH={setH} onM={setM} onS={setS} disabled={running} />
-                    <PresetRow onPick={(sec)=>{
-                      const H=Math.floor(sec/3600), M=Math.floor((sec%3600)/60), S=sec%60;
-                      setH(H); setM(M); setS(S); setRemaining(sec); setInitialDuration(0);
-                    }} disabled={running} />
-                    <ProgressBar progress={timerProgress} warn={!!lastSeconds} />
-                  </div>
-                ) : null}
-              </div>
-
-              {/* ✅ Aide : cachée en mode élève */}
-              {!studentView && <HelpSection />}
-
-              {/* Petit rappel discret du raccourci (optionnel) */}
-              {!studentView ? null : (
-                <div className="mt-4 text-xs text-zinc-500 text-right">
-                  Raccourci : touche <span className="px-2 py-1 rounded bg-white/10 border border-white/10">E</span>
-                </div>
-              )}
             </div>
-          </div>
-        );
-      }
-
-      function StudentViewToggle({ value, onChange }) {
-        return (
-          <button
-            onClick={() => onChange(!value)}
-            className={`px-3 py-2 text-sm rounded-xl border border-white/10 transition
-              ${value ? "bg-white/15" : "bg-white/5 hover:bg-white/10"}`}
-            aria-pressed={value}
-            title="Basculer l'affichage élève (touche E)"
-          >
-            Affichage élève {value ? "✓" : ""}
-          </button>
-        );
-      }
-
-      function TimeDisplay({ value, format, running, studentView }) {
-        return (
-          <div>
-            <div className={`${studentView ? "text-[72px] md:text-[96px]" : "text-[56px] md:text-[72px]"} font-bold tabular-nums leading-none select-none drop-shadow-[0_0_12px_rgba(250,204,21,0.15)]`}>
-              {format(value)}
+            <div class="presets">
+              <span class="lbl">Raccourcis :</span>
+              <button class="chip" data-sec="30">30 s</button>
+              <button class="chip" data-sec="300">5 min</button>
+              <button class="chip" data-sec="600">10 min</button>
+              <button class="chip" data-sec="900">15 min</button>
             </div>
-            {!studentView && (
-              <div className="mt-2 text-sm text-zinc-400">
-                {running ? "En cours…" : "En pause"}
-              </div>
-            )}
+            <div class="progress" id="progressWrap"><i id="progressBar"></i></div>
           </div>
-        );
-      }
+        </div>
 
-      function TimerInputs({ h, m, s, onH, onM, onS, disabled }) {
-        const clamp = (v,max)=> Math.min(Math.max(0, v), max);
-        const parse = (v)=> Number.isNaN(parseInt(v)) ? 0 : parseInt(v);
-        return (
-          <div className="flex flex-col items-start gap-2">
-            <label className="text-sm text-zinc-400">Durée du minuteur</label>
-            <div className="flex items-center gap-3 flex-wrap">
-              <NumberInput label="heures" value={h} onChange={(v)=>onH(clamp(parse(v), 99))} disabled={disabled} />
-              <span className="opacity-50">:</span>
-              <NumberInput label="minutes" value={m} onChange={(v)=>onM(clamp(parse(v), 59))} disabled={disabled} />
-              <span className="opacity-50">:</span>
-              <NumberInput label="secondes" value={s} onChange={(v)=>onS(clamp(parse(v), 59))} disabled={disabled} />
-            </div>
-          </div>
-        );
-      }
+        <!-- visuel -->
+        <div class="totem" id="totem"></div>
+      </div>
 
-      function NumberInput({ label, value, onChange, disabled }) {
-        return (
-          <div className="flex flex-col items-start">
-            <input
-              type="number"
-              min={0}
-              max={label === "heures" ? 99 : 59}
-              value={value}
-              onChange={(e)=>onChange(e.target.value)}
-              disabled={disabled}
-              className="w-24 px-3 py-2 rounded-xl bg-zinc-900/70 border border-white/10 focus:outline-none focus:ring-2 focus:ring-amber-400 tabular-nums"
-              aria-label={label}
-            />
-            <span className="mt-1 text-xs text-zinc-500">{label}</span>
-          </div>
-        );
-      }
+      <!-- Contenu Horloge -->
+      <div class="clockpanel hidden" id="clockPanel">
+        <div class="clockface" id="clockFace"></div>
+      </div>
+    </div>
 
-      function ModeSwitcher({ mode, onChange }) {
-        return (
-          <div className="bg-white/5 border border-white/10 rounded-xl p-1 flex gap-1">
-            <button
-              onClick={()=>onChange("chronometre")}
-              className={`px-3 py-2 text-sm rounded-lg transition ${mode === "chronometre" ? "bg-amber-500 text-zinc-900" : "hover:bg-white/10"}`}
-              aria-pressed={mode === "chronometre"}
-            >Chronomètre</button>
-            <button
-              onClick={()=>onChange("minuteur")}
-              className={`px-3 py-2 text-sm rounded-lg transition ${mode === "minuteur" ? "bg-amber-500 text-zinc-900" : "hover:bg-white/10"}`}
-              aria-pressed={mode === "minuteur"}
-            >Minuteur</button>
-          </div>
-        );
-      }
+    <!-- ===== Aide ===== -->
+    <p class="footnote" id="footnote">
+      Chronomètre et minuteur pour rythmer la classe. Les dix dernières secondes pulsent en cuivre et une alarme retentit à la fin.
+      Raccourcis : <kbd>Espace</kbd> démarrer/arrêter · <kbd>R</kbd> réinitialiser · <kbd>E</kbd> affichage élève · <kbd>F</kbd> plein écran.
+    </p>
+  </div>
 
-      function PresetRow({ onPick, disabled }){
-        const Btn = ({ label, sec }) => (
-          <button onClick={()=>onPick(sec)} disabled={disabled}
-            className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-50 transition text-sm">{label}</button>
-        );
-        return (
-          <div className="mt-4 flex items-center gap-2 flex-wrap text-sm text-zinc-400">
-            <span>Presets:</span>
-            <Btn label="30 s"  sec={30} />
-            <Btn label="5 min" sec={300} />
-            <Btn label="10 min" sec={600} />
-            <Btn label="15 min" sec={900} />
-          </div>
-        );
-      }
+<script>
+(function(){
+  "use strict";
 
-      function HelpSection(){
-        return (
-          <div className="mt-6 text-sm text-zinc-400 space-y-1">
-            <p>• Chronomètre: Démarrer, Arrêter, Remettre à zéro.</p>
-            <p>• Minuteur: règle heures/minutes/secondes, Démarrer. Alarme à la fin.</p>
-            <p>• Presets: 30 s, 5/10/15 min. Les 10 dernières secondes pulsent en doré.</p>
-          </div>
-        );
-      }
+  /* ============ État ============ */
+  var MODE = "chrono";          // "chrono" | "timer" | "clock"
+  var running = false;
+  var elapsed = 0;              // chrono : secondes écoulées
+  var remaining = 0;            // minuteur : secondes restantes
+  var initialDuration = 0;      // minuteur : durée de référence pour la barre
+  var ticker = null;
+  var FLIP_PERIOD = 5;          // le retourneur bascule toutes les 5 secondes
+  var flipped = false;          // orientation courante du sablier
+  var CLOCK_STYLE = "analog";   // "analog" | "digital" | "hybrid" | "magic"
 
-      function TimeTurnerVisual({ running }) {
-        return (
-          <div className="relative w-[220px] h-[220px] mx-auto select-none">
-            <div className={`absolute inset-0 rounded-full bg-gradient-to-tr from-amber-300/10 to-amber-500/10 ${running ? "animate-aura" : ""}`}></div>
-            <svg viewBox="0 0 200 200" className="w-full h-full">
-              <g className={running ? "animate-spin-slow origin-center" : "origin-center"}>
-                <circle cx="100" cy="100" r="92" fill="none" stroke="rgba(250,204,21,0.55)" strokeWidth="3" />
-                <circle cx="100" cy="100" r="86" fill="none" stroke="rgba(250,204,21,0.25)" strokeWidth="2" strokeDasharray="6 10" />
-              </g>
-              <g className={running ? "animate-spin-rev origin-center" : "origin-center"}>
-                <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(250,204,21,0.6)" strokeWidth="3" />
-                <circle cx="100" cy="100" r="56" fill="none" stroke="rgba(250,204,21,0.25)" strokeWidth="2" strokeDasharray="4 8" />
-              </g>
-              <g>
-                <rect x="92" y="65" width="16" height="70" rx="8" fill="rgba(255,255,255,0.06)" stroke="rgba(250,204,21,0.8)" />
-                <path d="M92 80 L108 95 L92 110 Z" fill="rgba(250,204,21,0.7)" />
-                <path d="M108 95 L92 110 L108 125 Z" fill="rgba(250,204,21,0.35)" />
-              </g>
-            </svg>
-          </div>
-        );
-      }
+  /* ============ Raccourcis DOM ============ */
+  var $ = function(id){ return document.getElementById(id); };
+  var bigTime   = $("bigTime");
+  var statusEl  = $("status");
+  var hintEl    = $("hint");
+  var startBtn  = $("startBtn");
+  var resetBtn  = $("resetBtn");
+  var testBtn   = $("testBtn");
+  var stage     = $("stage");
+  var totem     = $("totem");
+  var timerSetup= $("timerSetup");
+  var progressWrap = $("progressWrap");
+  var progressBar  = $("progressBar");
+  var titleEl   = $("title");
+  var inH=$("inH"), inM=$("inM"), inS=$("inS");
+  var timerPanel= $("timerPanel");
+  var clockPanel= $("clockPanel");
+  var clockFace = $("clockFace");
+  var clockStyles = $("clockStyles");
 
-      function HourglassVisual({ running, progress, warn }) {
-        const pct = Math.min(1, Math.max(0, progress));
-        const topSand = 1 - pct;
-        const bottomSand = pct;
-        return (
-          <div className="relative w-[220px] h-[260px] mx-auto select-none">
-            <div className={`absolute -inset-2 rounded-2xl ${warn ? "animate-warning" : running ? "animate-aura" : ""}`}></div>
-            <svg viewBox="0 0 200 240" className="w-full h-full drop-shadow-[0_0_10px_rgba(250,204,21,0.15)]">
-              <path d="M40 20 H160 C150 60 120 90 100 110 C80 90 50 60 40 20 Z" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.25)"/>
-              <path d="M40 220 H160 C150 180 120 150 100 130 C80 150 50 180 40 220 Z" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.25)"/>
-              <clipPath id="topClip"><path d="M40 20 H160 C150 60 120 90 100 110 C80 90 50 60 40 20 Z" /></clipPath>
-              <rect x="42" y={22 + 84 * topSand} width="116" height={84 * (1 - topSand) + 4} fill="rgba(250,204,21,0.65)" clipPath="url(#topClip)" />
-              {running && pct < 1 && (
-                <rect x="98" y="108" width="4" height="24" fill="rgba(250,204,21,0.85)" className="animate-sand" />
-              )}
-              <clipPath id="botClip"><path d="M40 220 H160 C150 180 120 150 100 130 C80 150 50 180 40 220 Z" /></clipPath>
-              <rect x="42" y={220 - 84 * bottomSand - 4} width="116" height={84 * bottomSand + 4} fill="rgba(250,204,21,0.55)" clipPath="url(#botClip)" />
-              <rect x="35" y="12" width="130" height="8" rx="4" fill="rgba(250,204,21,0.75)" />
-              <rect x="35" y="220" width="130" height="8" rx="4" fill="rgba(250,204,21,0.75)" />
-              <rect x="35" y="28" width="8" height="196" rx="4" fill="rgba(250,204,21,0.35)" />
-              <rect x="157" y="28" width="8" height="196" rx="4" fill="rgba(250,204,21,0.35)" />
-            </svg>
-          </div>
-        );
-      }
+  /* ============ Utilitaires ============ */
+  function pad(n){ return String(n).padStart(2,"0"); }
+  function fmt(sec){
+    var t = Math.max(0, Math.floor(Math.abs(sec)));
+    return pad(Math.floor(t/3600)) + ":" + pad(Math.floor((t%3600)/60)) + ":" + pad(t%60);
+  }
+  function clamp(v,max){ v = parseInt(v,10); if(isNaN(v)) v=0; return Math.min(Math.max(0,v),max); }
+  function setupSeconds(){ return clamp(inH.value,99)*3600 + clamp(inM.value,59)*60 + clamp(inS.value,59); }
 
-      function ProgressBar({ progress, warn }) {
-        return (
-          <div className="mt-4 h-2 w-full bg-white/10 rounded-full overflow-hidden">
-            <div className={`h-full ${warn ? "bg-amber-400 animate-pulse" : "bg-amber-300"}`} style={{ width: `${Math.round(progress * 100)}%` }} />
-          </div>
-        );
-      }
+  /* ============ Alarme (Web Audio, aucun fichier requis) ============ */
+  var audioCtx = null;
+  function beep(){
+    try{
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if(!Ctx) return;
+      if(!audioCtx) audioCtx = new Ctx();
+      if(audioCtx.state === "suspended") audioCtx.resume();
+      // trois notes ascendantes, sonorité « carillon »
+      [880, 1108, 1318].forEach(function(freq, i){
+        var t0 = audioCtx.currentTime + i*0.18;
+        var o = audioCtx.createOscillator();
+        var g = audioCtx.createGain();
+        o.type = "triangle"; o.frequency.value = freq;
+        o.connect(g); g.connect(audioCtx.destination);
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.35, t0+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0+0.55);
+        o.start(t0); o.stop(t0+0.6);
+      });
+    }catch(e){}
+  }
 
-      // Monter l'app
-      const root = ReactDOM.createRoot(document.getElementById("app"));
-      root.render(<MinuteurChronometre />);
-    </script>
-  </body>
+  /* ============ Rendu ============ */
+  function render(){
+    if(MODE==="clock"){
+      // en mode horloge, l'affichage est piloté par la boucle drawClock
+      stage.classList.remove("running");
+      return;
+    }
+    var display = MODE === "chrono" ? elapsed : remaining;
+    bigTime.textContent = fmt(display);
+
+    var warn = MODE === "timer" && remaining > 0 && remaining <= 10;
+    bigTime.classList.toggle("warn", warn);
+
+    statusEl.textContent = running ? "En cours" : "En pause";
+
+    // progression globale du minuteur (pour la barre de progression)
+    var prog = (MODE==="timer" && initialDuration>0)
+      ? Math.min(1, Math.max(0, 1 - remaining/initialDuration)) : 0;
+    progressBar.style.width = Math.round(prog*100) + "%";
+    progressWrap.classList.toggle("warn", warn);
+
+    // --- Retourneur : remplissage cyclique sur 5 s + bascule à chaque cycle ---
+    // temps déjà écoulé depuis le lancement
+    var spent = (MODE==="timer" && initialDuration>0) ? (initialDuration - remaining) : 0;
+    var cycle = Math.floor(spent / FLIP_PERIOD);        // n° du retournement
+    var withinCycle = spent % FLIP_PERIOD;               // 0..4 s dans le cycle
+    // le sable se remplit de 0 -> 1 sur la durée d'un cycle
+    var sandFill = (MODE==="timer" && running) ? (withinCycle / FLIP_PERIOD) : (MODE==="timer" ? Math.min(1, withinCycle/FLIP_PERIOD) : 0);
+    // orientation : on alterne à chaque cycle (mais pas une fois le temps fini)
+    if(MODE==="timer" && running){
+      flipped = (cycle % 2 === 1);
+    }
+
+    // état de la scène (anime le visuel)
+    stage.classList.toggle("running", running);
+
+    // bouton démarrer/arrêter
+    if(running){
+      startBtn.textContent = "Arrêter";
+      startBtn.classList.remove("start"); startBtn.classList.add("stop");
+    } else {
+      startBtn.textContent = "Démarrer";
+      startBtn.classList.add("start"); startBtn.classList.remove("stop");
+    }
+
+    // indice contextuel (minuteur)
+    if(MODE==="timer"){
+      if(initialDuration===0 && remaining===0) hintEl.textContent = "Réglez une durée, puis lancez le retourneur.";
+      else if(running) hintEl.textContent = "Le retourneur s'active… il bascule toutes les 5 secondes.";
+      else if(remaining>0) hintEl.textContent = "Prêt : " + fmt(remaining);
+      else hintEl.textContent = "Temps écoulé.";
+    } else {
+      hintEl.textContent = "";
+    }
+
+    drawTotem(sandFill, warn);
+  }
+
+  /* ============ Visuel SVG : Retourneur (chrono) / Sablier (minuteur) ============ */
+  function drawTotem(prog, warn){
+    if(MODE==="chrono"){
+      totem.innerHTML =
+        '<svg viewBox="0 0 200 200" aria-hidden="true">'
+        + '<defs>'
+        +   '<radialGradient id="aura" cx="50%" cy="50%" r="50%">'
+        +     '<stop offset="0%" stop-color="rgba(212,162,58,.35)"/>'
+        +     '<stop offset="100%" stop-color="rgba(212,162,58,0)"/>'
+        +   '</radialGradient>'
+        + '</defs>'
+        + '<circle class="aura" cx="100" cy="100" r="96" fill="url(#aura)"/>'
+        // anneau extérieur gravé
+        + '<g class="ring-outer">'
+        +   '<circle cx="100" cy="100" r="88" fill="none" stroke="var(--gold)" stroke-width="3"/>'
+        +   '<circle cx="100" cy="100" r="80" fill="none" stroke="var(--gold-deep)" stroke-width="1.5" stroke-dasharray="2 7"/>'
+        +   tickMarks(100,100,88,60)
+        + '</g>'
+        // anneau intérieur contrarotatif
+        + '<g class="ring-inner">'
+        +   '<circle cx="100" cy="100" r="60" fill="none" stroke="var(--gold-bright)" stroke-width="2.5"/>'
+        +   '<circle cx="100" cy="100" r="52" fill="none" stroke="var(--gold-deep)" stroke-width="1" stroke-dasharray="1 6"/>'
+        + '</g>'
+        // sablier central fixe
+        + '<g stroke="var(--gold-bright)" stroke-width="2.5" fill="none" stroke-linejoin="round">'
+        +   '<path d="M84 70 H116 M84 130 H116"/>'
+        +   '<path d="M88 70 C88 92 112 92 112 70" fill="rgba(212,162,58,.18)"/>'
+        +   '<path d="M88 130 C88 108 112 108 112 130" fill="rgba(212,162,58,.30)"/>'
+        +   '<line x1="100" y1="92" x2="100" y2="108" stroke="var(--gold)"/>'
+        + '</g>'
+        + '</svg>';
+    } else {
+      // ===== Retourneur : disque doré tournant + sablier qui se remplit =====
+      // Le sablier se REMPLIT (le sable s'accumule) au rythme de prog (0 -> 1).
+      // "ampoule basse" = celle qui reçoit le sable ; elle se remplit de bas en haut.
+      var stroke = warn ? "var(--ember)" : "var(--gold-bright)";
+
+      // hauteur de sable accumulé dans l'ampoule réceptrice (max 56 px de course)
+      var fillH = 56 * Math.min(1, Math.max(0, prog));
+      // et ce qui reste en réserve dans l'ampoule émettrice (haut)
+      var reserveH = 56 * (1 - Math.min(1, Math.max(0, prog)));
+      var reserveY = 30 + (56 - reserveH); // le tas du haut diminue depuis le bas du bulbe
+
+      totem.innerHTML =
+        '<svg viewBox="0 0 200 220" aria-hidden="true">'
+        + '<defs><radialGradient id="aura2" cx="50%" cy="50%" r="50%">'
+        +   '<stop offset="0%" stop-color="'+(warn?'rgba(194,89,43,.4)':'rgba(212,162,58,.32)')+'"/>'
+        +   '<stop offset="100%" stop-color="rgba(212,162,58,0)"/>'
+        +   '</radialGradient></defs>'
+        + '<circle class="aura" cx="100" cy="110" r="98" fill="url(#aura2)"/>'
+
+        // ---- DISQUE doré gravé, en rotation continue ----
+        + '<g class="disc-spin">'
+        +   '<circle cx="100" cy="110" r="94" fill="none" stroke="var(--gold)" stroke-width="3"/>'
+        +   '<circle cx="100" cy="110" r="86" fill="none" stroke="var(--gold-deep)" stroke-width="1.5" stroke-dasharray="2 7"/>'
+        +   '<circle cx="100" cy="110" r="78" fill="none" stroke="var(--gold-deep)" stroke-width="1" stroke-dasharray="1 9" opacity=".7"/>'
+        +   tickMarks(100,110,94,72)
+        + '</g>'
+
+        // ---- FLIPPER : se retourne de 180° toutes les 5 s ----
+        + '<g class="flipper' + (flipped ? ' flipped' : '') + '">'
+
+        //  montants du sablier
+        +   '<rect x="60" y="48" width="80" height="6" rx="3" fill="var(--gold)"/>'
+        +   '<rect x="60" y="166" width="80" height="6" rx="3" fill="var(--gold)"/>'
+        +   '<rect x="62" y="52" width="5" height="116" rx="2.5" fill="var(--gold-deep)"/>'
+        +   '<rect x="133" y="52" width="5" height="116" rx="2.5" fill="var(--gold-deep)"/>'
+
+        //  verre haut (réserve) + verre bas (réception)
+        +   '<path d="M68 56 H132 C126 92 108 104 100 110 C92 104 74 92 68 56 Z" fill="rgba(255,255,255,.04)" stroke="'+stroke+'" stroke-width="2"/>'
+        +   '<path d="M68 164 H132 C126 128 108 116 100 110 C92 116 74 128 68 164 Z" fill="rgba(255,255,255,.04)" stroke="'+stroke+'" stroke-width="2"/>'
+
+        //  sable en réserve (ampoule haute), diminue
+        +   '<clipPath id="ct"><path d="M68 56 H132 C126 92 108 104 100 110 C92 104 74 92 68 56 Z"/></clipPath>'
+        +   '<rect x="66" y="'+reserveY.toFixed(1)+'" width="68" height="'+(reserveH+2).toFixed(1)+'" fill="var(--gold)" clip-path="url(#ct)" opacity="'+(reserveH>0.5?0.85:0)+'"/>'
+
+        //  filet de sable au centre
+        +   '<rect class="sand-stream" x="98.5" y="104" width="3" height="14" fill="var(--gold-bright)"/>'
+
+        //  sable accumulé (ampoule basse), se remplit de bas en haut
+        +   '<clipPath id="cb"><path d="M68 164 H132 C126 128 108 116 100 110 C92 116 74 128 68 164 Z"/></clipPath>'
+        +   '<rect x="66" y="'+(164 - fillH - 2).toFixed(1)+'" width="68" height="'+(fillH+4).toFixed(1)+'" fill="var(--gold-bright)" clip-path="url(#cb)"/>'
+
+        + '</g>'
+        + '</svg>';
+    }
+  }
+  function tickMarks(cx,cy,r,count){
+    var s = "";
+    for(var i=0;i<count;i++){
+      var a = (i/count)*Math.PI*2;
+      var long = i%5===0;
+      var r1 = r, r2 = r - (long?7:4);
+      var x1 = cx + r1*Math.cos(a), y1 = cy + r1*Math.sin(a);
+      var x2 = cx + r2*Math.cos(a), y2 = cy + r2*Math.sin(a);
+      s += '<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+'" stroke="var(--gold)" stroke-width="'+(long?2:1)+'" opacity="'+(long?.9:.5)+'"/>';
+    }
+    return s;
+  }
+
+  /* ============ Horloge : 4 styles ============ */
+  // calcule l'extrémité d'une aiguille (angle en fraction de tour, 0 = midi/haut)
+  function hand(cx, cy, frac, len){
+    var a = frac*Math.PI*2 - Math.PI/2;
+    return { x:(cx+Math.cos(a)*len), y:(cy+Math.sin(a)*len) };
+  }
+  function clockGraduations(cx,cy,r,withNumbers){
+    var s="";
+    for(var i=0;i<60;i++){
+      var a=(i/60)*Math.PI*2 - Math.PI/2;
+      var big=i%5===0;
+      var r1=r, r2=r-(big?12:6);
+      s+='<line x1="'+(cx+Math.cos(a)*r1).toFixed(1)+'" y1="'+(cy+Math.sin(a)*r1).toFixed(1)
+        +'" x2="'+(cx+Math.cos(a)*r2).toFixed(1)+'" y2="'+(cy+Math.sin(a)*r2).toFixed(1)
+        +'" stroke="var(--gold)" stroke-width="'+(big?2.5:1)+'" opacity="'+(big?.9:.45)+'"/>';
+    }
+    if(withNumbers){
+      for(var h=1;h<=12;h++){
+        var a2=(h/12)*Math.PI*2 - Math.PI/2;
+        var rx=cx+Math.cos(a2)*(r-26), ry=cy+Math.sin(a2)*(r-26);
+        s+='<text x="'+rx.toFixed(1)+'" y="'+(ry+6).toFixed(1)+'" text-anchor="middle" '
+          +'font-family="var(--serif)" font-size="16" fill="var(--parchment)">'+h+'</text>';
+      }
+    }
+    return s;
+  }
+  // dessine les aiguilles h/m/s pour un cadran de rayon r
+  function clockHands(cx,cy,r,now,opts){
+    opts=opts||{};
+    var ms=now.getMilliseconds();
+    var sFrac=(now.getSeconds()+(opts.smooth?ms/1000:0))/60;
+    var mFrac=(now.getMinutes()+now.getSeconds()/60)/60;
+    var hFrac=((now.getHours()%12)+now.getMinutes()/60)/12;
+    var H=hand(cx,cy,hFrac,r*0.52), M=hand(cx,cy,mFrac,r*0.74), S=hand(cx,cy,sFrac,r*0.82);
+    var hcol=opts.hcol||"var(--parchment)", scol=opts.scol||"var(--ember)";
+    return ''
+      + '<line x1="'+cx+'" y1="'+cy+'" x2="'+H.x.toFixed(1)+'" y2="'+H.y.toFixed(1)+'" stroke="'+hcol+'" stroke-width="6" stroke-linecap="round"/>'
+      + '<line x1="'+cx+'" y1="'+cy+'" x2="'+M.x.toFixed(1)+'" y2="'+M.y.toFixed(1)+'" stroke="'+hcol+'" stroke-width="4" stroke-linecap="round"/>'
+      + '<line x1="'+cx+'" y1="'+cy+'" x2="'+S.x.toFixed(1)+'" y2="'+S.y.toFixed(1)+'" stroke="'+scol+'" stroke-width="2" stroke-linecap="round"/>'
+      + '<circle cx="'+cx+'" cy="'+cy+'" r="5" fill="var(--gold-bright)"/>';
+  }
+
+  /* ============ Word clock magique ============ */
+  // Disposition de la grille : chaque cellule a une clé (key) et un libellé (txt).
+  // Les clés servent à allumer les bons mots selon l'heure.
+  var WC_ROWS = [
+    [ {k:"IL",t:"IL"}, {k:"EST",t:"EST"}, {k:"MINUIT",t:"MINUIT"}, {k:"MIDI",t:"MIDI"} ],
+    [ {k:"H1",t:"UNE"}, {k:"H2",t:"DEUX"}, {k:"H3",t:"TROIS"}, {k:"H4",t:"QUATRE"} ],
+    [ {k:"H5",t:"CINQ"}, {k:"H6",t:"SIX"}, {k:"H7",t:"SEPT"}, {k:"H8",t:"HUIT"} ],
+    [ {k:"H9",t:"NEUF"}, {k:"H10",t:"DIX"}, {k:"H11",t:"ONZE"}, {k:"H12",t:"DOUZE"} ],
+    [ {k:"HEURE",t:"HEURE"}, {k:"HEURES",t:"HEURES"}, {k:"ET",t:"ET"}, {k:"MOINS",t:"MOINS"} ],
+    [ {k:"LE",t:"LE"}, {k:"QUART",t:"QUART"}, {k:"DEMIE",t:"DEMIE"}, {k:"PILE",t:"PILE"} ],
+    [ {k:"M5",t:"CINQ"}, {k:"M10",t:"DIX"}, {k:"M20",t:"VINGT"}, {k:"M25",t:"CINQ"} ]
+  ];
+  // pour "VINGT-CINQ" minutes : on allume M20 (VINGT) + M25 (CINQ)
+
+  var wcBuilt = false;
+  var wcCells = {};   // key -> élément span
+  var wcLastSig = ""; // signature de l'état allumé, pour éviter les maj inutiles
+
+  function buildWordClock(){
+    if(wcBuilt) return;
+    var html = '<div class="grid" role="img" aria-label="Horloge en toutes lettres">';
+    WC_ROWS.forEach(function(row){
+      html += '<div class="row">';
+      row.forEach(function(c){
+        html += '<span class="word" data-k="'+c.k+'">'+c.t+'</span>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // --- brume dorée de lever de soleil ---
+    var mist = '<div class="mist">';
+    for(var f=0; f<4; f++){
+      var ftop = (20 + f*20).toFixed(0);
+      var fdur = (20 + Math.random()*14).toFixed(1);
+      var fdel = (Math.random()*8).toFixed(1);
+      mist += '<span class="fog" style="top:'+ftop+'%;--fdur:'+fdur+'s;--fdelay:'+fdel+'s"></span>';
+    }
+    mist += '</div>';
+
+    clockFace.innerHTML = '<div class="wordclock">'+mist+html+'</div>';
+    wcCells = {};
+    Array.prototype.forEach.call(clockFace.querySelectorAll(".word"), function(el){
+      wcCells[el.getAttribute("data-k")] = el;
+    });
+    wcBuilt = true;
+    wcLastSig = "";
+  }
+  function resetWordClock(){ wcBuilt = false; wcCells = {}; }
+
+  var WC_HOURKEY = {1:"H1",2:"H2",3:"H3",4:"H4",5:"H5",6:"H6",7:"H7",8:"H8",9:"H9",10:"H10",11:"H11",12:"H12"};
+
+  // renvoie la liste des clés à allumer pour h24:m
+  function wordKeysFor(h24, m){
+    var on = ["IL","EST"];
+    var r = Math.round(m/5)*5;
+    var h = h24;
+    if(r === 60){ r = 0; h = (h+1)%24; }
+    var useNext = r > 30;
+    var dh = useNext ? (h+1)%24 : h;     // heure affichée
+    var minPart = useNext ? 60 - r : r;
+
+    var H12 = dh % 12;
+    if(dh === 0){ on.push("MINUIT"); }
+    else if(dh === 12){ on.push("MIDI"); }
+    else {
+      on.push(WC_HOURKEY[H12 === 0 ? 12 : H12]);
+      on.push(H12 === 1 ? "HEURE" : "HEURES");
+    }
+
+    if(minPart === 0){
+      on.push("PILE");
+    } else if(!useNext){
+      if(r === 15){ on.push("ET","QUART"); }
+      else if(r === 30){ on.push("ET","DEMIE"); }
+      else { pushMinKeys(on, r); }
+    } else {
+      on.push("MOINS");
+      if(minPart === 15){ on.push("LE","QUART"); }
+      else { pushMinKeys(on, minPart); }
+    }
+    return on;
+  }
+  function pushMinKeys(on, n){
+    if(n===5) on.push("M5");
+    else if(n===10) on.push("M10");
+    else if(n===20) on.push("M20");
+    else if(n===25){ on.push("M20","M25"); } // VINGT-CINQ
+  }
+
+  function updateWordClock(now){
+    var keys = wordKeysFor(now.getHours(), now.getMinutes());
+    var sig = keys.join(",");
+    if(sig === wcLastSig) return;   // rien n'a changé : on garde la lueur
+    wcLastSig = sig;
+    var set = {}; keys.forEach(function(k){ set[k] = true; });
+    for(var k in wcCells){
+      wcCells[k].classList.toggle("on", !!set[k]);
+    }
+  }
+
+  function drawClock(now){
+    var t = pad(now.getHours())+":"+pad(now.getMinutes())+":"+pad(now.getSeconds());
+
+    if(CLOCK_STYLE==="digital"){
+      clockFace.innerHTML =
+        '<svg viewBox="0 0 200 200" aria-hidden="true">'
+        + '<g class="ring-outer"><circle cx="100" cy="100" r="92" fill="none" stroke="var(--gold-deep)" stroke-width="1.5" stroke-dasharray="2 8"/></g>'
+        + '<circle cx="100" cy="100" r="84" fill="none" stroke="var(--gold)" stroke-width="2"/>'
+        + '<text x="100" y="108" text-anchor="middle" font-family="var(--serif)" font-weight="600" '
+        +   'font-size="34" fill="var(--parchment)" style="font-variant-numeric:tabular-nums">'+t+'</text>'
+        + '<text x="100" y="132" text-anchor="middle" font-family="var(--sans)" font-size="9" '
+        +   'letter-spacing="3" fill="var(--parchment-2)">HEURE</text>'
+        + '</svg>';
+      return;
+    }
+
+    if(CLOCK_STYLE==="hybrid"){
+      clockFace.innerHTML =
+        '<svg viewBox="0 0 200 200" aria-hidden="true">'
+        + '<circle class="aura" cx="100" cy="100" r="96" fill="none"/>'
+        + '<circle cx="100" cy="100" r="92" fill="rgba(10,8,5,.4)" stroke="var(--gold)" stroke-width="2.5"/>'
+        + clockGraduations(100,100,92,false)
+        + clockHands(100,100,92,now,{smooth:true})
+        + '<rect x="64" y="120" width="72" height="26" rx="6" fill="rgba(0,0,0,.45)" stroke="var(--gold-deep)" stroke-width="1"/>'
+        + '<text x="100" y="138" text-anchor="middle" font-family="var(--serif)" font-size="16" '
+        +   'fill="var(--gold-bright)" style="font-variant-numeric:tabular-nums">'+t+'</text>'
+        + '</svg>';
+      return;
+    }
+
+    if(CLOCK_STYLE==="magic"){
+      buildWordClock();      // construit la grille si besoin
+      updateWordClock(now);  // allume les bons mots
+      return;
+    }
+
+    // analog (par défaut) : cadran classique avec chiffres
+    clockFace.innerHTML =
+      '<svg viewBox="0 0 200 200" aria-hidden="true">'
+      + '<circle cx="100" cy="100" r="94" fill="rgba(10,8,5,.5)" stroke="var(--gold)" stroke-width="3"/>'
+      + '<circle cx="100" cy="100" r="88" fill="none" stroke="var(--gold-deep)" stroke-width="1"/>'
+      + clockGraduations(100,100,94,true)
+      + clockHands(100,100,94,now,{smooth:false})
+      + '</svg>';
+  }
+
+  /* ============ Logique du décompte ============ */
+  function tick(){
+    if(MODE==="chrono"){
+      elapsed += 1;
+    } else {
+      remaining -= 1;
+      if(remaining <= 0){
+        remaining = 0;
+        running = false;
+        clearInterval(ticker); ticker = null;
+        beep();
+      }
+    }
+    render();
+  }
+
+  function start(){
+    if(running) return;
+    if(MODE==="timer"){
+      var init = remaining > 0 ? remaining : setupSeconds();
+      if(init <= 0){ render(); return; }
+      remaining = init;
+      initialDuration = init;
+      if(audioCtx && audioCtx.state==="suspended") audioCtx.resume(); // déverrouille le son via geste utilisateur
+    }
+    running = true;
+    clearInterval(ticker);
+    ticker = setInterval(tick, 1000);
+    render();
+  }
+  function stop(){
+    running = false;
+    clearInterval(ticker); ticker = null;
+    render();
+  }
+  function toggleRun(){ running ? stop() : start(); }
+  function reset(){
+    stop();
+    elapsed = 0; remaining = 0; initialDuration = 0; flipped = false;
+    if(MODE==="timer") remaining = setupSeconds();
+    render();
+  }
+
+  /* ============ Changement de mode ============ */
+  function setMode(m){
+    if(m===MODE) return;
+    stop();
+    MODE = m;
+    elapsed = 0; remaining = 0; initialDuration = 0; flipped = false;
+    $("modeChrono").setAttribute("aria-pressed", m==="chrono");
+    $("modeTimer").setAttribute("aria-pressed",  m==="timer");
+    $("modeClock").setAttribute("aria-pressed",  m==="clock");
+
+    if(m==="chrono")      titleEl.innerHTML = 'Le <em>Retourneur de Temps</em>';
+    else if(m==="timer")  titleEl.innerHTML = 'Le <em>Retourneur — Minuteur</em>';
+    else                  titleEl.innerHTML = 'L\u2019<em>Horloge du Temps</em>';
+
+    timerSetup.classList.toggle("hidden", m!=="timer");
+    testBtn.hidden = m!=="timer";
+
+    // bascule panneaux
+    timerPanel.classList.toggle("hidden", m==="clock");
+    clockPanel.classList.toggle("hidden", m!=="clock");
+    clockStyles.classList.toggle("hidden", m!=="clock");
+
+    if(m==="timer") remaining = setupSeconds();
+
+    if(m==="clock"){ startClockLoop(); } else { stopClockLoop(); resetWordClock(); }
+    render();
+  }
+
+  /* ============ Boucle d'animation de l'horloge ============ */
+  var clockRAF = null;
+  function clockLoop(){
+    drawClock(new Date());
+    clockRAF = requestAnimationFrame(clockLoop);
+  }
+  function startClockLoop(){ if(!clockRAF) clockLoop(); }
+  function stopClockLoop(){ if(clockRAF){ cancelAnimationFrame(clockRAF); clockRAF=null; } }
+
+  /* ============ Horloge en direct ============ */
+  var liveClock = $("liveClock");
+  var focusClockTime = $("focusClockTime");
+  function updateClock(){
+    var d = new Date();
+    var t = pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());
+    liveClock.textContent = t;
+    focusClockTime.textContent = t;
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  /* ============ Affichage élève (épuré) ============ */
+  function toggleFocus(){
+    var on = document.body.classList.toggle("focusmode");
+    $("focusBtn").classList.toggle("on", on);
+    // côte à côte uniquement pour chrono/minuteur sur grand écran paysage
+    document.body.classList.toggle("layout-split", on && MODE!=="clock");
+  }
+
+  /* ============ Plein écran (Fullscreen API) ============ */
+  function toggleFullscreen(){
+    var el = document.documentElement;
+    if(!document.fullscreenElement){
+      (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
+    } else {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+    }
+  }
+  document.addEventListener("fullscreenchange", function(){
+    var on = !!document.fullscreenElement;
+    $("fsBtn").classList.toggle("on", on);
+    document.body.classList.toggle("fs-active", on);
+  });
+
+  /* ============ Événements ============ */
+  startBtn.addEventListener("click", toggleRun);
+  resetBtn.addEventListener("click", reset);
+  testBtn.addEventListener("click", beep);
+  $("modeChrono").addEventListener("click", function(){ setMode("chrono"); });
+  $("modeTimer").addEventListener("click",  function(){ setMode("timer"); });
+  $("modeClock").addEventListener("click",  function(){ setMode("clock"); });
+
+  Array.prototype.forEach.call(document.querySelectorAll(".cstyle"), function(btn){
+    btn.addEventListener("click", function(){
+      CLOCK_STYLE = btn.getAttribute("data-style");
+      Array.prototype.forEach.call(document.querySelectorAll(".cstyle"), function(b){
+        b.setAttribute("aria-pressed", b===btn);
+      });
+      resetWordClock();          // forcer la reconstruction si on (re)vient sur magique
+      drawClock(new Date());
+    });
+  });
+  $("focusBtn").addEventListener("click", toggleFocus);
+  $("fsBtn").addEventListener("click", toggleFullscreen);
+  $("focusExit").addEventListener("click", toggleFocus);
+
+  Array.prototype.forEach.call(document.querySelectorAll(".chip"), function(chip){
+    chip.addEventListener("click", function(){
+      var sec = parseInt(chip.getAttribute("data-sec"),10);
+      inH.value = Math.floor(sec/3600);
+      inM.value = Math.floor((sec%3600)/60);
+      inS.value = sec%60;
+      remaining = sec; initialDuration = 0;
+      render();
+    });
+  });
+  [inH,inM,inS].forEach(function(inp){
+    inp.addEventListener("input", function(){
+      if(MODE==="timer" && !running){ remaining = setupSeconds(); render(); }
+    });
+  });
+
+  // raccourcis clavier (ignorés quand on tape dans un champ)
+  document.addEventListener("keydown", function(e){
+    var typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+    if(typing) return;
+    var k = e.key.toLowerCase();
+    if(e.key===" " || k==="spacebar"){ e.preventDefault(); toggleRun(); }
+    else if(k==="r"){ reset(); }
+    else if(k==="e"){ toggleFocus(); }
+    else if(k==="f"){ toggleFullscreen(); }
+    else if(e.key==="Escape" && document.body.classList.contains("focusmode") && !document.fullscreenElement){ toggleFocus(); }
+  });
+
+  /* ============ Démarrage ============ */
+  render();
+})();
+</script>
+</body>
 </html>
